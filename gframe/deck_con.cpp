@@ -62,6 +62,7 @@ static bool check_set_code(const CardDataC& data, int set_code) {
 void DeckBuilder::Initialize() {
 	mainGame->is_building = true;
 	mainGame->is_siding = false;
+	mainGame->ClearCardInfo();
 	mainGame->wInfos->setVisible(true);
 	mainGame->wCardImg->setVisible(true);
 	mainGame->wDeckEdit->setVisible(true);
@@ -91,6 +92,7 @@ void DeckBuilder::Initialize() {
 }
 void DeckBuilder::Terminate() {
 	mainGame->is_building = false;
+	mainGame->ClearCardInfo();
 	mainGame->wDeckEdit->setVisible(false);
 	mainGame->wCategories->setVisible(false);
 	mainGame->wFilter->setVisible(false);
@@ -234,7 +236,7 @@ bool DeckBuilder::OnEvent(const irr::SEvent& event) {
 					mainGame->env->addMessageBox(L"", dataManager.GetSysString(1410));
 					break;
 				}
-				mainGame->imgCard->setImage(imageManager.tCover[0]);
+				mainGame->ClearCardInfo();
 				char deckbuf[1024];
 				char* pdeck = deckbuf;
 				BufferIO::WriteInt32(pdeck, deckManager.current_deck.main.size() + deckManager.current_deck.extra.size());
@@ -774,15 +776,6 @@ void DeckBuilder::StartFilter() {
 void DeckBuilder::FilterCards() {
 	results.clear();
 	const wchar_t* pstr = mainGame->ebCardName->getText();
-	int trycode = BufferIO::GetVal(pstr);
-	if(dataManager.GetData(trycode, 0)) {
-		auto ptr = dataManager.GetCodePointer(trycode);	// verified by GetData()
-		results.push_back(ptr);
-		mainGame->scrFilter->setVisible(false);
-		mainGame->scrFilter->setPos(0);
-		myswprintf(result_string, L"%d", results.size());
-		return;
-	}
 	unsigned int set_code = 0;
 	if(pstr[0] == L'@')
 		set_code = dataManager.GetSetCode(&pstr[1]);
@@ -870,8 +863,13 @@ void DeckBuilder::FilterCards() {
 			} else if(pstr[0] == L'@' && set_code) {
 				if(!check_set_code(data, set_code)) continue;
 			} else {
-				if(!CardNameContains(text.name.c_str(), pstr) && text.text.find(pstr) == std::wstring::npos
+				int trycode = BufferIO::GetVal(pstr);
+				bool tryresult = dataManager.GetData(trycode, 0);
+				if(!tryresult && !CardNameContains(text.name.c_str(), pstr) && text.text.find(pstr) == std::wstring::npos
 					&& (!set_code || !check_set_code(data, set_code)))
+					continue;
+				if (tryresult && data.code != trycode
+					&& !(data.alias == trycode && (data.alias - data.code < CARD_ARTWORK_VERSIONS_OFFSET || data.code - data.alias < CARD_ARTWORK_VERSIONS_OFFSET)))
 					continue;
 			}
 		}

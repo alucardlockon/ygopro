@@ -10,17 +10,7 @@
 #include "netserver.h"
 #include "single_mode.h"
 
-#ifndef _WIN32
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <unistd.h>
-#else
-#include <direct.h>
-#include <io.h>
-#endif
-
-const unsigned short PRO_VERSION = 0x1344;
+const unsigned short PRO_VERSION = 0x1346;
 
 namespace ygo {
 
@@ -28,7 +18,6 @@ Game* mainGame;
 
 bool Game::Initialize() {
 	srand(time(0));
-	initUtils();
 	LoadConfig();
 	irr::SIrrlichtCreationParameters params = irr::SIrrlichtCreationParameters();
 	params.AntiAlias = gameConf.antialias;
@@ -38,8 +27,10 @@ bool Game::Initialize() {
 		params.DriverType = irr::video::EDT_OPENGL;
 	params.WindowSize = irr::core::dimension2d<u32>(1024, 640);
 	device = irr::createDeviceEx(params);
-	if(!device)
+	if(!device) {
+		ErrorLog("Failed to create Irrlicht Engine device!");
 		return false;
+	}
 	linePatternD3D = 0;
 	linePatternGL = 0x0f0f;
 	waitFrame = 0;
@@ -61,13 +52,19 @@ bool Game::Initialize() {
 	driver->setTextureCreationFlag(irr::video::ETCF_CREATE_MIP_MAPS, false);
 	driver->setTextureCreationFlag(irr::video::ETCF_OPTIMIZED_FOR_QUALITY, true);
 	imageManager.SetDevice(device);
-	if(!imageManager.Initial())
+	if(!imageManager.Initial()) {
+		ErrorLog("Failed to load textures!");
 		return false;
+	}
 	LoadExpansionDB();
-	if(!dataManager.LoadDB("cards.cdb"))
+	if(!dataManager.LoadDB("cards.cdb")) {
+		ErrorLog("Failed to load card database (cards.cdb)!");
 		return false;
-	if(!dataManager.LoadStrings("strings.conf"))
+	}
+	if(!dataManager.LoadStrings("strings.conf")) {
+		ErrorLog("Failed to load strings!");
 		return false;
+	}
 	dataManager.LoadStrings("./expansions/strings.conf");
 	env = device->getGUIEnvironment();
 	numFont = irr::gui::CGUITTFont::createTTFont(env, gameConf.numfont, 16);
@@ -75,6 +72,10 @@ bool Game::Initialize() {
 	lpcFont = irr::gui::CGUITTFont::createTTFont(env, gameConf.numfont, 48);
 	guiFont = irr::gui::CGUITTFont::createTTFont(env, gameConf.textfont, gameConf.textfontsize);
 	textFont = guiFont;
+	if(!numFont || !textFont) {
+		ErrorLog("Failed to load font(s)!");
+		return false;
+	}
 	smgr = device->getSceneManager();
 	device->setWindowCaption(L"YGOPro");
 	device->setResizable(false);
@@ -85,10 +86,10 @@ bool Game::Initialize() {
 	else
 		hWnd = reinterpret_cast<HWND>(exposedData.OpenGLWin32.HWnd);
 	if(hWnd) {
-		LONG style = GetWindowLong(hWnd, GWL_STYLE);
+		LONG style = GetWindowLongW(hWnd, GWL_STYLE);
 		style |= WS_MINIMIZEBOX;
-		SetWindowLong(hWnd, GWL_STYLE, style);
-		SendMessage(hWnd, WM_NCPAINT, 1, 0);
+		SetWindowLongW(hWnd, GWL_STYLE, style);
+		SendMessageW(hWnd, WM_NCPAINT, 1, 0);
 	}
 #endif
 	SetWindowsIcon();
@@ -269,6 +270,9 @@ bool Game::Initialize() {
 	posY += 30;
 	chkWaitChain = env->addCheckBox(false, rect<s32>(posX, posY, posX + 260, posY + 25), tabHelper, -1, dataManager.GetSysString(1277));
 	chkWaitChain->setChecked(gameConf.chkWaitChain != 0);
+	posY += 30;
+	chkQuickAnimation = env->addCheckBox(false, rect<s32>(posX, posY, posX + 260, posY + 25), tabHelper, CHECKBOX_QUICK_ANIMATION, dataManager.GetSysString(1299));
+	chkQuickAnimation->setChecked(gameConf.quick_animation != 0);
 	//system
 	irr::gui::IGUITab* tabSystem = wInfos->addTab(dataManager.GetSysString(1273));
 	posY = 20;
@@ -353,11 +357,14 @@ bool Game::Initialize() {
 	wOptions = env->addWindow(rect<s32>(490, 200, 840, 340), false, L"");
 	wOptions->getCloseButton()->setVisible(false);
 	wOptions->setVisible(false);
-	stOptions =  env->addStaticText(L"", rect<s32>(20, 20, 350, 100), false, true, wOptions, -1, false);
+	stOptions = env->addStaticText(L"", rect<s32>(20, 20, 350, 100), false, true, wOptions, -1, false);
 	stOptions->setTextAlignment(irr::gui::EGUIA_UPPERLEFT, irr::gui::EGUIA_CENTER);
 	btnOptionOK = env->addButton(rect<s32>(130, 105, 220, 130), wOptions, BUTTON_OPTION_OK, dataManager.GetSysString(1211));
 	btnOptionp = env->addButton(rect<s32>(20, 105, 60, 130), wOptions, BUTTON_OPTION_PREV, L"<<<");
 	btnOptionn = env->addButton(rect<s32>(290, 105, 330, 130), wOptions, BUTTON_OPTION_NEXT, L">>>");
+	for(int i = 0; i < 5; ++i) {
+		btnOption[i] = env->addButton(rect<s32>(10, 30 + 40 * i, 340, 60 + 40 * i), wOptions, BUTTON_OPTION_0 + i, L"");
+	}
 	//pos select
 	wPosSelect = env->addWindow(rect<s32>(340, 200, 935, 410), false, dataManager.GetSysString(561));
 	wPosSelect->getCloseButton()->setVisible(false);
@@ -666,6 +673,11 @@ bool Game::Initialize() {
 	stTip->setBackgroundColor(0xc0ffffff);
 	stTip->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
 	stTip->setVisible(false);
+	//tip for cards in select / display list
+	stCardListTip = env->addStaticText(L"", rect<s32>(0, 0, 150, 150), false, true, wCardSelect, TEXT_CARD_LIST_TIP, true);
+	stCardListTip->setBackgroundColor(0xc0ffffff);
+	stCardListTip->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
+	stCardListTip->setVisible(false);
 	device->setEventReceiver(&menuHandler);
 	LoadConfig();
 	if(!soundManager.Init()) {
@@ -713,7 +725,7 @@ void Game::MainLoop() {
 		atkdy = (float)sin(atkframe);
 		driver->beginScene(true, true, SColor(0, 0, 0, 0));
 		gMutex.Lock();
-		if(dInfo.isStarted || dInfo.isReplaySkiping) {
+		if(dInfo.isStarted) {
 			if(dInfo.isFinished && showcardcode == 1)
 				soundManager.PlayBGM(BGM_WIN);
 			else if(dInfo.isFinished && (showcardcode == 2 || showcardcode == 3))
@@ -848,70 +860,25 @@ void Game::SetStaticText(irr::gui::IGUIStaticText* pControl, u32 cWidth, irr::gu
 	pControl->setText(dataManager.strBuffer);
 }
 void Game::LoadExpansionDB() {
-#ifdef _WIN32
-	char fpath[1000];
-	WIN32_FIND_DATAW fdataw;
-	HANDLE fh = FindFirstFileW(L"./expansions/*.cdb", &fdataw);
-	if(fh != INVALID_HANDLE_VALUE) {
-		do {
-			if(!(fdataw.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-				char fname[780];
-				BufferIO::EncodeUTF8(fdataw.cFileName, fname);
-				sprintf(fpath, "./expansions/%s", fname);
-				dataManager.LoadDB(fpath);
-			}
-		} while(FindNextFileW(fh, &fdataw));
-		FindClose(fh);
-	}
-#else
-	DIR * dir;
-	struct dirent * dirp;
-	if((dir = opendir("./expansions/")) != NULL) {
-		while((dirp = readdir(dir)) != NULL) {
-			size_t len = strlen(dirp->d_name);
-			if(len < 5 || strcasecmp(dirp->d_name + len - 4, ".cdb") != 0)
-				continue;
-			char filepath[1000];
-			sprintf(filepath, "./expansions/%s", dirp->d_name);
-			dataManager.LoadDB(filepath);
+	FileSystem::TraversalDir("./expansions", [](const char* name, bool isdir) {
+		if(!isdir && strrchr(name, '.') && !mystrncasecmp(strrchr(name, '.'), ".cdb", 4)) {
+			char fpath[1024];
+			sprintf(fpath, "./expansions/%s", name);
+			dataManager.LoadDB(fpath);
 		}
-		closedir(dir);
-	}
-#endif
+	});
 }
 void Game::RefreshDeck(irr::gui::IGUIComboBox* cbDeck) {
 	cbDeck->clear();
-#ifdef _WIN32
-	WIN32_FIND_DATAW fdataw;
-	HANDLE fh = FindFirstFileW(L"./deck/*.ydk", &fdataw);
-	if(fh == INVALID_HANDLE_VALUE)
-		return;
-	do {
-		if(!(fdataw.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-			wchar_t* pf = fdataw.cFileName;
-			while(*pf) pf++;
-			while(*pf != L'.') pf--;
-			*pf = 0;
-			cbDeck->addItem(fdataw.cFileName);
+	FileSystem::TraversalDir(L"./deck", [cbDeck](const wchar_t* name, bool isdir) {
+		if(!isdir && wcsrchr(name, '.') && !mywcsncasecmp(wcsrchr(name, '.'), L".ydk", 4)) {
+			size_t len = wcslen(name);
+			wchar_t deckname[256];
+			wcsncpy(deckname, name, len - 4);
+			deckname[len - 4] = 0;
+			cbDeck->addItem(deckname);
 		}
-	} while(FindNextFileW(fh, &fdataw));
-	FindClose(fh);
-#else
-	DIR * dir;
-	struct dirent * dirp;
-	if((dir = opendir("./deck/")) == NULL)
-		return;
-	while((dirp = readdir(dir)) != NULL) {
-		size_t len = strlen(dirp->d_name);
-		if(len < 5 || strcasecmp(dirp->d_name + len - 4, ".ydk") != 0)
-			continue;
-		dirp->d_name[len - 4] = 0;
-		wchar_t wname[256];
-		BufferIO::DecodeUTF8(dirp->d_name, wname);
-		cbDeck->addItem(wname);
-	}
-	closedir(dir);
-#endif
+	});
 	for(size_t i = 0; i < cbDeck->getItemCount(); ++i) {
 		if(!wcscmp(cbDeck->getItem(i), gameConf.lastdeck)) {
 			cbDeck->setSelected(i);
@@ -921,61 +888,17 @@ void Game::RefreshDeck(irr::gui::IGUIComboBox* cbDeck) {
 }
 void Game::RefreshReplay() {
 	lstReplayList->clear();
-#ifdef _WIN32
-	WIN32_FIND_DATAW fdataw;
-	HANDLE fh = FindFirstFileW(L"./replay/*.yrp", &fdataw);
-	if(fh == INVALID_HANDLE_VALUE)
-		return;
-	do {
-		if(!(fdataw.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && Replay::CheckReplay(fdataw.cFileName)) {
-			lstReplayList->addItem(fdataw.cFileName);
-		}
-	} while(FindNextFileW(fh, &fdataw));
-	FindClose(fh);
-#else
-	DIR * dir;
-	struct dirent * dirp;
-	if((dir = opendir("./replay/")) == NULL)
-		return;
-	while((dirp = readdir(dir)) != NULL) {
-		size_t len = strlen(dirp->d_name);
-		if(len < 5 || strcasecmp(dirp->d_name + len - 4, ".yrp") != 0)
-			continue;
-		wchar_t wname[256];
-		BufferIO::DecodeUTF8(dirp->d_name, wname);
-		if(Replay::CheckReplay(wname))
-			lstReplayList->addItem(wname);
-	}
-	closedir(dir);
-#endif
+	FileSystem::TraversalDir(L"./replay", [this](const wchar_t* name, bool isdir) {
+		if(!isdir && wcsrchr(name, '.') && !mywcsncasecmp(wcsrchr(name, '.'), L".yrp", 4) && Replay::CheckReplay(name))
+			lstReplayList->addItem(name);
+	});
 }
 void Game::RefreshSingleplay() {
 	lstSinglePlayList->clear();
-#ifdef _WIN32
-	WIN32_FIND_DATAW fdataw;
-	HANDLE fh = FindFirstFileW(L"./single/*.lua", &fdataw);
-	if(fh == INVALID_HANDLE_VALUE)
-		return;
-	do {
-		if(!(fdataw.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-			lstSinglePlayList->addItem(fdataw.cFileName);
-	} while(FindNextFileW(fh, &fdataw));
-	FindClose(fh);
-#else
-	DIR * dir;
-	struct dirent * dirp;
-	if((dir = opendir("./single/")) == NULL)
-		return;
-	while((dirp = readdir(dir)) != NULL) {
-		size_t len = strlen(dirp->d_name);
-		if(len < 5 || strcasecmp(dirp->d_name + len - 4, ".lua") != 0)
-			continue;
-		wchar_t wname[256];
-		BufferIO::DecodeUTF8(dirp->d_name, wname);
-		lstSinglePlayList->addItem(wname);
-	}
-	closedir(dir);
-#endif
+	FileSystem::TraversalDir(L"./single", [this](const wchar_t* name, bool isdir) {
+		if(!isdir && wcsrchr(name, '.') && !mywcsncasecmp(wcsrchr(name, '.'), L".lua", 4))
+			lstSinglePlayList->addItem(name);
+	});
 }
 void Game::RefreshBot() {
 	if(!gameConf.enable_bot_mode)
@@ -1055,6 +978,7 @@ void Game::LoadConfig() {
 	gameConf.chkIgnoreDeckChanges = 0;
 	gameConf.defaultOT = 1;
 	gameConf.enable_bot_mode = 0;
+	gameConf.quick_animation = 0;
 	gameConf.enable_sound = true;
 	gameConf.sound_volume = 0.5;
 	gameConf.enable_music = true;
@@ -1122,6 +1046,8 @@ void Game::LoadConfig() {
 			gameConf.defaultOT = atoi(valbuf);
 		} else if(!strcmp(strbuf, "enable_bot_mode")) {
 			gameConf.enable_bot_mode = atoi(valbuf);
+		} else if(!strcmp(strbuf, "quick_animation")) {
+			gameConf.quick_animation = atoi(valbuf);
 #ifdef YGOPRO_USE_IRRKLANG
 		} else if(!strcmp(strbuf, "enable_sound")) {
 			gameConf.enable_sound = atoi(valbuf) > 0;
@@ -1194,6 +1120,7 @@ void Game::SaveConfig() {
 	fprintf(fp, "ignore_deck_changes = %d\n", (chkIgnoreDeckChanges->isChecked() ? 1 : 0));
 	fprintf(fp, "default_ot = %d\n", gameConf.defaultOT);
 	fprintf(fp, "enable_bot_mode = %d\n", gameConf.enable_bot_mode);
+	fprintf(fp, "quick_animation = %d\n", gameConf.quick_animation);
 #ifdef YGOPRO_USE_IRRKLANG
 	fprintf(fp, "enable_sound = %d\n", (chkEnableSound->isChecked() ? 1 : 0));
 	fprintf(fp, "enable_music = %d\n", (chkEnableMusic->isChecked() ? 1 : 0));
@@ -1215,7 +1142,7 @@ void Game::ShowCardInfo(int code) {
 		memset(&cd, 0, sizeof(CardData));
 	imgCard->setImage(imageManager.GetTexture(code));
 	imgCard->setScaleImage(true);
-	if(cd.alias != 0 && (cd.alias - code < 10 || code - cd.alias < 10))
+	if(cd.alias != 0 && (cd.alias - code < CARD_ARTWORK_VERSIONS_OFFSET || code - cd.alias < CARD_ARTWORK_VERSIONS_OFFSET))
 		myswprintf(formatBuffer, L"%ls[%08d]", dataManager.GetName(cd.alias), cd.alias);
 	else myswprintf(formatBuffer, L"%ls[%08d]", dataManager.GetName(code), code);
 	stName->setText(formatBuffer);
@@ -1240,7 +1167,7 @@ void Game::ShowCardInfo(int code) {
 		myswprintf(formatBuffer, L"[%ls] %ls/%ls", dataManager.FormatType(cd.type), dataManager.FormatRace(cd.race), dataManager.FormatAttribute(cd.attribute));
 		stInfo->setText(formatBuffer);
 		if(!(cd.type & TYPE_LINK)) {
-			wchar_t* form = L"\u2605";
+			const wchar_t* form = L"\u2605";
 			if(cd.type & TYPE_XYZ) form = L"\u2606";
 			myswprintf(formatBuffer, L"[%ls%d] ", form, cd.level);
 			wchar_t adBuffer[16];
@@ -1284,7 +1211,16 @@ void Game::ShowCardInfo(int code) {
 	const auto& tsize = stText->getRelativePosition();
 	InitStaticText(stText, tsize.getWidth(), tsize.getHeight(), textFont, showingtext);
 }
-void Game::AddChatMsg(wchar_t* msg, int player) {
+void Game::ClearCardInfo(int player) {
+	imgCard->setImage(imageManager.tCover[player]);
+	stName->setText(L"");
+	stInfo->setText(L"");
+	stDataInfo->setText(L"");
+	stSetName->setText(L"");
+	stText->setText(L"");
+	scrCardText->setVisible(false);
+}
+void Game::AddChatMsg(const wchar_t* msg, int player) {
 	for(int i = 7; i > 0; --i) {
 		chatMsg[i] = chatMsg[i - 1];
 		chatTiming[i] = chatTiming[i - 1];
@@ -1335,72 +1271,28 @@ void Game::ClearChatMsg() {
 		chatTiming[i] = 0;
 	}
 }
-void Game::AddDebugMsg(char* msg)
-{
+void Game::AddDebugMsg(const char* msg) {
 	if (enable_log & 0x1) {
 		wchar_t wbuf[1024];
 		BufferIO::DecodeUTF8(msg, wbuf);
 		AddChatMsg(wbuf, 9);
 	}
 	if (enable_log & 0x2) {
-		FILE* fp = fopen("error.log", "at");
-		if (!fp)
-			return;
-		time_t nowtime = time(NULL);
-		struct tm *localedtime = localtime(&nowtime);
-		char timebuf[40];
-		strftime(timebuf, 40, "%Y-%m-%d %H:%M:%S", localedtime);
-		fprintf(fp, "[%s][Script Error]: %s\n", timebuf, msg);
-		fclose(fp);
+		char msgbuf[1040];
+		sprintf(msgbuf, "[Script Error]: %s", msg);
+		ErrorLog(msgbuf);
 	}
 }
-bool Game::MakeDirectory(const std::string folder) {
-    std::string folder_builder;
-    std::string sub;
-    sub.reserve(folder.size());
-    for(auto it = folder.begin(); it != folder.end(); ++it) {
-        const char c = *it;
-        sub.push_back(c);
-        if(c == '/' || it == folder.end() - 1) {
-            folder_builder.append(sub);
-            if(access(folder_builder.c_str(), 0) != 0)
-#ifdef _WIN32
-                if(mkdir(folder_builder.c_str()) != 0)
-#else
-                if(mkdir(folder_builder.c_str(), 0777) != 0)
-#endif
-                    return false;
-            sub.clear();
-        }
-    }
-    return true;
-}
-void Game::initUtils() {
-	//user files
-	MakeDirectory("replay");
-	//cards from extra pack
-	MakeDirectory("expansions");
-	//files in ygopro-starter-pack
-	MakeDirectory("deck");
-	MakeDirectory("single");
-	//original files
-	MakeDirectory("script");
-	MakeDirectory("textures");
-	//sound
-#ifdef YGOPRO_USE_IRRKLANG
-	MakeDirectory("sound");
-	MakeDirectory("sound/BGM");
-	MakeDirectory("sound/BGM/advantage");
-	MakeDirectory("sound/BGM/deck");
-	MakeDirectory("sound/BGM/disadvantage");
-	MakeDirectory("sound/BGM/duel");
-	MakeDirectory("sound/BGM/lose");
-	MakeDirectory("sound/BGM/menu");
-	MakeDirectory("sound/BGM/win");
-#endif
-	//pics
-	MakeDirectory("pics");
-	MakeDirectory("pics/field");
+void Game::ErrorLog(const char* msg) {
+	FILE* fp = fopen("error.log", "at");
+	if(!fp)
+		return;
+	time_t nowtime = time(NULL);
+	struct tm *localedtime = localtime(&nowtime);
+	char timebuf[40];
+	strftime(timebuf, 40, "%Y-%m-%d %H:%M:%S", localedtime);
+	fprintf(fp, "[%s]%s\n", timebuf, msg);
+	fclose(fp);
 }
 void Game::ClearTextures() {
 	matManager.mCard.setTexture(0, 0);
