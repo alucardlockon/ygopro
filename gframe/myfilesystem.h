@@ -5,12 +5,11 @@
 #include <functional>
 #include "bufferio.h"
 
-#ifdef _WIN32
-#include <direct.h>
-#include <sys/stat.h>
-#else
+#ifndef _WIN32
 #include <dirent.h>
 #include <sys/stat.h>
+#include <vector>
+#include <algorithm>
 #endif
 
 #ifdef _WIN32
@@ -20,8 +19,8 @@
 class FileSystem {
 public:
 	static bool IsFileExists(const wchar_t* wfile) {
-		struct _stat fileStat;
-		return (_wstat(wfile, &fileStat) == 0) && !(fileStat.st_mode & _S_IFDIR);
+		DWORD attr = GetFileAttributesW(wfile);
+		return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 	}
 
 	static bool IsFileExists(const char* file) {
@@ -31,8 +30,8 @@ public:
 	}
 
 	static bool IsDirExists(const wchar_t* wdir) {
-		struct _stat fileStat;
-		return (_wstat(wdir, &fileStat) == 0) && (fileStat.st_mode & _S_IFDIR);
+		DWORD attr = GetFileAttributesW(wdir);
+		return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
 	}
 
 	static bool IsDirExists(const char* dir) {
@@ -42,7 +41,7 @@ public:
 	}
 
 	static bool MakeDir(const wchar_t* wdir) {
-		return _wmkdir(wdir) == 0;
+		return CreateDirectoryW(wdir, NULL);
 	}
 
 	static bool MakeDir(const char* dir) {
@@ -112,21 +111,41 @@ public:
 		return MakeDir(dir);
 	}
 
+	struct file_unit {
+		std::string filename;
+		bool is_dir;
+	};
+
 	static void TraversalDir(const char* path, const std::function<void(const char*, bool)>& cb) {
 		DIR* dir = nullptr;
 		struct dirent* dirp = nullptr;
 		if((dir = opendir(path)) == nullptr)
 			return;
 		struct stat fileStat;
+		std::vector<file_unit> file_list;
 		while((dirp = readdir(dir)) != nullptr) {
+			file_unit funit;
 			char fname[1024];
 			strcpy(fname, path);
 			strcat(fname, "/");
 			strcat(fname, dirp->d_name);
 			stat(fname, &fileStat);
-			cb(dirp->d_name, S_ISDIR(fileStat.st_mode));
+			funit.filename = std::string(dirp->d_name);
+			funit.is_dir = S_ISDIR(fileStat.st_mode);
+			file_list.push_back(funit);
 		}
 		closedir(dir);
+		std::sort(file_list.begin(), file_list.end(), TraversalDirSort);
+		for (file_unit funit : file_list)
+			cb(funit.filename.c_str(), funit.is_dir);
+	}
+
+	static bool TraversalDirSort(file_unit file1, file_unit file2) {
+		if(file1.is_dir != file2.is_dir) {
+			return file2.is_dir;
+		} else {
+			return file1.filename < file2.filename;
+		}
 	}
 
 	static void TraversalDir(const wchar_t* wpath, const std::function<void(const wchar_t*, bool)>& cb) {

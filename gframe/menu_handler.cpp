@@ -80,10 +80,10 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 					hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 					int status = evutil_getaddrinfo(hostname, port, &hints, &answer);
 					if(status != 0) {
-						mainGame->gMutex.Lock();
+						mainGame->gMutex.lock();
 						soundManager.PlaySoundEffect(SOUND_INFO);
 						mainGame->env->addMessageBox(L"", dataManager.GetSysString(1412));
-						mainGame->gMutex.Unlock();
+						mainGame->gMutex.unlock();
 						break;
 					} else {
 						sockaddr_in * sin = ((struct sockaddr_in *)answer->ai_addr);
@@ -245,12 +245,12 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 				int sel = mainGame->lstReplayList->getSelected();
 				if(sel == -1)
 					break;
-				mainGame->gMutex.Lock();
+				mainGame->gMutex.lock();
 				wchar_t textBuffer[256];
 				myswprintf(textBuffer, L"%ls\n%ls", mainGame->lstReplayList->getListItem(sel), dataManager.GetSysString(1363));
-				mainGame->SetStaticText(mainGame->stQMessage, 310, mainGame->textFont, (wchar_t*)textBuffer);
+				mainGame->SetStaticText(mainGame->stQMessage, 310, mainGame->guiFont, textBuffer);
 				mainGame->PopupElement(mainGame->wQuery);
-				mainGame->gMutex.Unlock();
+				mainGame->gMutex.unlock();
 				prev_operation = id;
 				prev_sel = sel;
 				break;
@@ -259,11 +259,11 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 				int sel = mainGame->lstReplayList->getSelected();
 				if(sel == -1)
 					break;
-				mainGame->gMutex.Lock();
+				mainGame->gMutex.lock();
 				mainGame->wReplaySave->setText(dataManager.GetSysString(1364));
 				mainGame->ebRSName->setText(mainGame->lstReplayList->getListItem(sel));
 				mainGame->PopupElement(mainGame->wReplaySave);
-				mainGame->gMutex.Unlock();
+				mainGame->gMutex.unlock();
 				prev_operation = id;
 				prev_sel = sel;
 				break;
@@ -285,7 +285,7 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 					NetServer::StopServer();
 					break;
 				}
-				STARTUPINFO si;
+				STARTUPINFOW si;
 				PROCESS_INFORMATION pi;
 				ZeroMemory(&si, sizeof(si));
 				si.cb = sizeof(si);
@@ -439,7 +439,7 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 				std::wstring repinfo;
 				time_t curtime = ReplayMode::cur_replay.pheader.seed;
 				tm* st = localtime(&curtime);
-				myswprintf(infobuf, L"%d/%d/%d %02d:%02d:%02d\n", st->tm_year + 1900, st->tm_mon + 1, st->tm_mday, st->tm_hour, st->tm_min, st->tm_sec);
+				wcsftime(infobuf, 256, L"%Y/%m/%d %H:%M:%S\n", st);
 				repinfo.append(infobuf);
 				wchar_t namebuf[4][20];
 				ReplayMode::cur_replay.ReadName(namebuf[0]);
@@ -454,7 +454,57 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 					myswprintf(infobuf, L"%ls\n===VS===\n%ls\n", namebuf[0], namebuf[1]);
 				repinfo.append(infobuf);
 				mainGame->ebRepStartTurn->setText(L"1");
-				mainGame->SetStaticText(mainGame->stReplayInfo, 180, mainGame->guiFont, (wchar_t*)repinfo.c_str());
+				mainGame->SetStaticText(mainGame->stReplayInfo, 180, mainGame->guiFont, repinfo.c_str());
+				break;
+			}
+			case LISTBOX_SINGLEPLAY_LIST: {
+				int sel = mainGame->lstSinglePlayList->getSelected();
+				if(sel == -1)
+					break;
+				const wchar_t* name = mainGame->lstSinglePlayList->getListItem(sel);
+				wchar_t fname[256];
+				myswprintf(fname, L"./single/%ls", name);
+				FILE *fp;
+#ifdef _WIN32
+				fp = _wfopen(fname, L"rb");
+#else
+				char filename[256];
+				BufferIO::EncodeUTF8(fname, filename);
+				fp = fopen(filename, "rb");
+#endif
+				if(!fp) {
+					mainGame->stSinglePlayInfo->setText(L"");
+					break;
+				}
+				char linebuf[1024];
+				wchar_t wlinebuf[1024];
+				std::wstring message = L"";
+				bool in_message = false;
+				while(fgets(linebuf, 1024, fp)) {
+					if(!strncmp(linebuf, "--[[message", 11)) {
+						size_t len = strlen(linebuf);
+						char* msgend = strrchr(linebuf, ']');
+						if(len <= 13) {
+							in_message = true;
+							continue;
+						} else if(len > 15 && msgend) {
+							*(msgend - 1) = '\0';
+							BufferIO::DecodeUTF8(linebuf + 12, wlinebuf);
+							message.append(wlinebuf);
+							break;
+						}
+					}
+					if(!strncmp(linebuf, "]]", 2)) {
+						in_message = false;
+						break;
+					}
+					if(in_message) {
+						BufferIO::DecodeUTF8(linebuf, wlinebuf);
+						message.append(wlinebuf);
+					}
+				}
+				fclose(fp);
+				mainGame->SetStaticText(mainGame->stSinglePlayInfo, 200, mainGame->guiFont, message.c_str());
 				break;
 			}
 			case LISTBOX_BOT_LIST: {
